@@ -27,10 +27,10 @@ async function run() {
     await client.connect();
 
     const usersCollection = client.db("onlineAcademy").collection("users");
+    const courseCollection = client.db("onlineAcademy").collection("courses");
 
     // ************ user related api *************
-
-    // 1. post an user in db
+    // 1. post from client to db
     app.post("/users", async (req, res) => {
       try {
         const user = req.body;
@@ -41,8 +41,22 @@ async function run() {
             .json({ message: "Name and email are required" });
         }
 
-        const result = await usersCollection.insertOne(user);
-        res.status(201).json({ success: true, result });
+        const existingUser = await usersCollection.findOne({
+          email: user.email,
+        });
+
+        if (!existingUser) {
+          const insertResult = await usersCollection.insertOne(user);
+          return res
+            .status(201)
+            .json({ success: true, message: "User added", insertResult });
+        } else {
+          return res.status(200).json({
+            success: true,
+            message: "User already exists",
+            existingUser,
+          });
+        }
       } catch (error) {
         console.error("Error adding user:", error);
         res.status(500).json({ success: false, error: error.message });
@@ -124,6 +138,85 @@ async function run() {
       } catch (error) {
         res.status(500).json({ success: false, error: error.message });
       }
+    });
+
+    // ************* course related apis **************
+    // 1. post api
+    app.post("/courses", async (req, res) => {
+      try {
+        const course = req.body;
+        if (!course.course_id || !course.course_name || !course.course_price) {
+          return res
+            .status(400)
+            .send({ message: "Required fields are missing" });
+        }
+
+        const existingCourse = await courseCollection.findOne({
+          course_id: course.course_id,
+        });
+
+        if (existingCourse) {
+          return res.status(409).send({
+            success: false,
+            message: "Course already exists",
+          });
+        }
+
+        const result = await courseCollection.insertOne(course);
+        res.status(201).send({
+          success: true,
+          message: "Course added successfully",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Error adding course:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error",
+        });
+      }
+    });
+    // 2. get api
+    app.get("/courses", async (req, res) => {
+      const courses = await courseCollection.find().toArray();
+      res.send(courses);
+    });
+    // 3. get a single course
+    app.get("/courses/:id", async (req, res) => {
+      const id = req.params.id;
+      const course = await courseCollection.findOne({ course_id: id });
+
+      if (!course) {
+        return res.status(404).send({ message: "Course not found" });
+      }
+
+      res.send(course);
+    });
+
+    // 4. update course
+    app.put("/courses/:id", async (req, res) => {
+      const id = req.params.id;
+      const updateCourse = req.body;
+
+      const result = await courseCollection.updateOne(
+        { course_id: id },
+        { $set: updateCourse }
+      );
+
+      res.send({
+        message: "Course updated successfully",
+        modifiedCount: result.modifiedCount,
+      });
+    });
+
+    // 5. delete api
+    app.delete("/courses/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await courseCollection.deleteOne({ course_id: id });
+      res.send({
+        message: "Course deleted successfully",
+        deletedCount: result.deletedCount,
+      });
     });
 
     // Send a ping to confirm a successful connection
