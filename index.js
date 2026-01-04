@@ -226,7 +226,6 @@ async function run() {
       });
     });
     // 6. enrolled course by user
-    // 6. enrolled course by user - ENHANCED VERSION
     app.post("/enrollments", async (req, res) => {
       try {
         const { userEmail, courseId } = req.body;
@@ -280,6 +279,7 @@ async function run() {
           courseName: course.course_name, // Store course name for reference
           enrolledAt: new Date(),
           status: "active",
+          completed: false,
         };
 
         console.log("Creating enrollment:", enrollmentDoc);
@@ -307,29 +307,79 @@ async function run() {
         const email = req.query.email;
         if (!email) return res.status(400).send({ message: "email required" });
 
-        // Get all enrollments for this user
+        // get all enrollments for this user
         const enrollments = await enrollmentsCollection
           .find({ userEmail: email })
           .toArray();
 
-        console.log("Found enrollments:", enrollments); // Debug log
-
         if (!enrollments.length) return res.send([]);
 
-        // Extract course IDs from enrollments
+        // get all course IDs
         const courseIds = enrollments.map((e) => e.courseId);
 
-        console.log("Looking for course IDs:", courseIds); // Debug log
-
-        // Get all courses where course_id matches any of the enrolled courseIds
+        // fetch matching course docs
         const courses = await courseCollection
           .find({ course_id: { $in: courseIds } })
           .toArray();
 
-        console.log("Found courses:", courses.length); // Debug log
-        res.send(courses);
+        // combine: inject completed flag into course objects
+        const merged = courses.map((course) => {
+          const related = enrollments.find(
+            (e) => e.courseId.toString() === course.course_id.toString()
+          );
+          return {
+            ...course,
+            completed: related?.completed || false,
+          };
+        });
+
+        res.send(merged);
       } catch (error) {
         console.error("MY-COURSES ERROR:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // mark enrolled course as completed
+    app.patch("/enrollments/complete", async (req, res) => {
+      try {
+        const { userEmail, courseId } = req.body;
+
+        if (!userEmail || !courseId) {
+          return res
+            .status(400)
+            .send({ message: "Email and courseId required" });
+        }
+
+        const result = await enrollmentsCollection.updateOne(
+          { userEmail, courseId: courseId.toString() },
+          { $set: { completed: true } }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({ message: "Enrollment not found" });
+        }
+
+        res.send({ success: true, message: "Marked as completed" });
+      } catch (error) {
+        console.error("Complete update error:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.get("/completed-courses", async (req, res) => {
+      try {
+        const email = req.query.email;
+        if (!email) return res.status(400).send({ message: "email required" });
+
+        const count = await enrollmentsCollection.countDocuments({
+          userEmail: email,
+          completed: true,
+        });
+
+        res.send({ completedCount: count });
+      } catch (error) {
+        console.error(error);
         res.status(500).send({ message: "Internal server error" });
       }
     });
