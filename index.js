@@ -28,6 +28,7 @@ async function run() {
 
     const usersCollection = client.db("onlineAcademy").collection("users");
     const courseCollection = client.db("onlineAcademy").collection("courses");
+    const blogsCollection = client.db("onlineAcademy").collection("blogs");
 
     // ************ user related api *************
     // 1. post from client to db
@@ -217,6 +218,34 @@ async function run() {
         message: "Course deleted successfully",
         deletedCount: result.deletedCount,
       });
+    });
+
+    // ******** blog related api *********
+    // 1. get api
+    app.get("/blogs", async (req, res) => {
+      const blogs = await blogsCollection.find().toArray();
+      res.send(blogs);
+    });
+
+    // 2. get single blog
+    app.get("/blogs/:id", async (req, res) => {
+      const id = req.params.id;
+      const blog = await blogsCollection.findOne({ id: id });
+
+      if (!blog) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Blog not found" });
+      }
+
+      res.send(blog);
+    });
+
+    // 3. delete blog
+    app.delete("/blogs/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await blogsCollection.deleteOne(id);
+      res.send(result);
     });
 
     // Send a ping to confirm a successful connection
