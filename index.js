@@ -35,6 +35,9 @@ async function run() {
     const enrollmentsCollection = client
       .db("onlineAcademy")
       .collection("enrollments");
+    const submitCollection = client
+      .db("onlineAcademy")
+      .collection("assignmentSubmissions");
 
     // ************ user related api *************
     // 1. post from client to db
@@ -381,6 +384,101 @@ async function run() {
       } catch (error) {
         console.error(error);
         res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // submit related api
+    app.post("/assignment-submissions", async (req, res) => {
+      try {
+        const { studentName, studentEmail, assignmentId, fileUrl } = req.body;
+
+        // Basic validation
+        if (!studentName || !studentEmail || !assignmentId) {
+          return res.status(400).send({
+            success: false,
+            message: "studentName, studentEmail, and assignmentId are required",
+          });
+        }
+
+        // Create the submission object
+        const submissionDoc = {
+          studentName: studentName.trim(),
+          studentEmail: studentEmail.trim(),
+          assignmentId: assignmentId.trim(),
+          fileUrl: fileUrl?.trim() || "",
+          submittedAt: new Date(),
+        };
+
+        // Insert into `assignmentSubmissions` collection
+        const result = await client
+          .db("onlineAcademy")
+          .collection("assignmentSubmissions")
+          .insertOne(submissionDoc);
+
+        res.status(201).send({
+          success: true,
+          message: "Assignment submitted successfully",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Assignment submission error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error",
+        });
+      }
+    });
+
+    // GET submissions by student email
+    app.get("/assignment-submissions/by-student", async (req, res) => {
+      try {
+        const email = req.query.email;
+        if (!email) {
+          return res.status(400).send({
+            success: false,
+            message: "email query param required",
+          });
+        }
+
+        const submissions = await client
+          .db("onlineAcademy")
+          .collection("assignmentSubmissions")
+          .find({ studentEmail: email.trim() })
+          .toArray();
+
+        res.send({ success: true, data: submissions });
+      } catch (error) {
+        console.error("Error getting student submissions:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error",
+        });
+      }
+    });
+
+    // count submissions by student
+    app.get("/submitted-assignments", async (req, res) => {
+      try {
+        const email = req.query.email;
+        if (!email) {
+          return res.status(400).send({
+            success: false,
+            message: "email query param required",
+          });
+        }
+
+        const count = await client
+          .db("onlineAcademy")
+          .collection("assignmentSubmissions")
+          .countDocuments({ studentEmail: email.trim() });
+
+        res.send({ submittedCount: count });
+      } catch (error) {
+        console.error("Error getting submitted assignments count:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error",
+        });
       }
     });
 
