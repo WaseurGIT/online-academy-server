@@ -9,7 +9,7 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.febqytm.mongodb.net/?appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -29,6 +29,9 @@ async function run() {
     const usersCollection = client.db("onlineAcademy").collection("users");
     const courseCollection = client.db("onlineAcademy").collection("courses");
     const blogsCollection = client.db("onlineAcademy").collection("blogs");
+    const assignmentCollection = client
+      .db("onlineAcademy")
+      .collection("assignments");
 
     // ************ user related api *************
     // 1. post from client to db
@@ -246,6 +249,112 @@ async function run() {
       const id = req.params.id;
       const result = await blogsCollection.deleteOne(id);
       res.send(result);
+    });
+
+    // *********** assignment related api ************
+    // 1. get all from db
+    app.get("/assignments", async (req, res) => {
+      try {
+        const result = await assignmentCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching assignments:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal server error" });
+      }
+    });
+    // 2. get a single
+    app.get("/assignments/:id", async (req, res) => {
+      const id = req.params.id;
+
+      try {
+        const result = await assignmentCollection.findOne({ id });
+
+        if (!result) {
+          return res.status(404).json({ message: "Assignment not found" });
+        }
+
+        res.status(200).json(result);
+      } catch (error) {
+        console.error("Error fetching assignment:", error);
+        res.status(500).json({ message: error.message });
+      }
+    });
+
+    // 3. post from client
+    app.post("/assignments", async (req, res) => {
+      try {
+        const assignment = req.body;
+
+        const requiredField = [
+          "assignment_id",
+          "assignment_title",
+          "description",
+          "marks",
+          "deadline",
+          "image",
+        ];
+        const missingField = requiredField.filter(
+          (field) => !assignment[field]
+        );
+        if (missingField.length > 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Missing required fields: ${missingFields.join(", ")}`,
+          });
+        }
+
+        const existing = await assignmentCollection.findOne({
+          assignment_id: assignment.assignment_id,
+        });
+        if (existing) {
+          return res.status(409).json({
+            success: false,
+            message: "Assignment with this ID already exists",
+          });
+        }
+
+        const result = await assignmentCollection.insertOne(assignment);
+        res.status(201).json({
+          success: true,
+          message: "Assignment added successfully",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Error adding assignment:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
+      }
+    });
+    // 4. delete an assignment
+    app.delete("/assignments/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        const result = await assignmentCollection.deleteOne({
+          assignment_id: id,
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).json({
+            success: false,
+            message: "Assignment not found",
+          });
+        }
+
+        res.status(200).json({
+          success: true,
+          message: "Assignment deleted successfully",
+          deletedCount: result.deletedCount,
+        });
+      } catch (error) {
+        console.error("Error deleting assignment:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
+      }
     });
 
     // Send a ping to confirm a successful connection
