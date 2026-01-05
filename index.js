@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+const jwt = require("jsonwebtoken");
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -38,6 +39,34 @@ async function run() {
     const submitCollection = client
       .db("onlineAcademy")
       .collection("assignmentSubmissions");
+
+    // ********** jwt related api ***********
+    app.post("/jwt", async (req, res) => {
+      const user = req.body;
+      const token = jwt.sign(user, process.env.JWT_SECRET, {
+        expiresIn: "24h",
+      });
+      res.send(token);
+    });
+
+    const verifyToken = (req, res, next) => {
+      const authHeader = req.headers.authorization;
+
+      if (!authHeader?.startsWith("Bearer ")) {
+        return res.status(401).send({ message: "Unauthorized" });
+      }
+
+      const token = authHeader.split(" ")[1];
+
+      jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) {
+          return res.status(401).send({ message: "Unauthorized" });
+        }
+
+        req.user = decoded;
+        next();
+      });
+    };
 
     // ************ user related api *************
     // 1. post from client to db
@@ -85,7 +114,7 @@ async function run() {
     });
 
     // 3. get a single user from db
-    app.get("/users/:email", async (req, res) => {
+    app.get("/users/:email", verifyToken, async (req, res) => {
       try {
         const email = req.params.email;
         const user = await usersCollection.findOne({ email: email });
@@ -123,7 +152,7 @@ async function run() {
     });
 
     // 5. delete user
-    app.delete("/users/:id", async (req, res) => {
+    app.delete("/users/:id", verifyToken, async (req, res) => {
       try {
         const id = req.params.id;
         const result = await usersCollection.deleteOne({
@@ -136,7 +165,7 @@ async function run() {
     });
 
     // 6. update user
-    app.put("/users/:id", async (req, res) => {
+    app.put("/users/:id", verifyToken, async (req, res) => {
       try {
         const id = req.params.id;
         const updatedData = req.body;
@@ -229,7 +258,7 @@ async function run() {
       });
     });
     // 6. enrolled course by user
-    app.post("/enrollments", async (req, res) => {
+    app.post("/enrollments", verifyToken, async (req, res) => {
       try {
         const { userEmail, courseId } = req.body;
 
@@ -305,7 +334,7 @@ async function run() {
     });
 
     // 7. get enrolled courses
-    app.get("/my-courses", async (req, res) => {
+    app.get("/my-courses", verifyToken, async (req, res) => {
       try {
         const email = req.query.email;
         if (!email) return res.status(400).send({ message: "email required" });
@@ -344,7 +373,7 @@ async function run() {
     });
 
     // mark enrolled course as completed
-    app.patch("/enrollments/complete", async (req, res) => {
+    app.patch("/enrollments/complete", verifyToken, async (req, res) => {
       try {
         const { userEmail, courseId } = req.body;
 
@@ -388,7 +417,7 @@ async function run() {
     });
 
     // submit related api
-    app.post("/assignment-submissions", async (req, res) => {
+    app.post("/assignment-submissions", verifyToken, async (req, res) => {
       try {
         const { studentName, studentEmail, assignmentId, fileUrl } = req.body;
 
@@ -430,31 +459,35 @@ async function run() {
     });
 
     // GET submissions by student email
-    app.get("/assignment-submissions/by-student", async (req, res) => {
-      try {
-        const email = req.query.email;
-        if (!email) {
-          return res.status(400).send({
+    app.get(
+      "/assignment-submissions/by-student",
+      verifyToken,
+      async (req, res) => {
+        try {
+          const email = req.query.email;
+          if (!email) {
+            return res.status(400).send({
+              success: false,
+              message: "email query param required",
+            });
+          }
+
+          const submissions = await client
+            .db("onlineAcademy")
+            .collection("assignmentSubmissions")
+            .find({ studentEmail: email.trim() })
+            .toArray();
+
+          res.send({ success: true, data: submissions });
+        } catch (error) {
+          console.error("Error getting student submissions:", error);
+          res.status(500).send({
             success: false,
-            message: "email query param required",
+            message: "Internal server error",
           });
         }
-
-        const submissions = await client
-          .db("onlineAcademy")
-          .collection("assignmentSubmissions")
-          .find({ studentEmail: email.trim() })
-          .toArray();
-
-        res.send({ success: true, data: submissions });
-      } catch (error) {
-        console.error("Error getting student submissions:", error);
-        res.status(500).send({
-          success: false,
-          message: "Internal server error",
-        });
       }
-    });
+    );
 
     // count submissions by student
     app.get("/submitted-assignments", async (req, res) => {
