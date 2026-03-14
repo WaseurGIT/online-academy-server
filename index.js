@@ -1,10 +1,9 @@
 const express = require("express");
 const cors = require("cors");
-require("dotenv").config();
 const jwt = require("jsonwebtoken");
-
-const app = express();
+require("dotenv").config();
 const port = process.env.PORT || 5000;
+const app = express();
 
 // middlewares
 app.use(cors());
@@ -22,13 +21,30 @@ const client = new MongoClient(uri, {
   },
 });
 
+const verifyToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: "Unauthorized" });
+    }
+    req.user = decoded;
+    next();
+  });
+};
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 
     const usersCollection = client.db("onlineAcademy").collection("users");
-    const courseCollection = client.db("onlineAcademy").collection("courses");
     const blogsCollection = client.db("onlineAcademy").collection("blogs");
     const assignmentCollection = client
       .db("onlineAcademy")
@@ -42,30 +58,42 @@ async function run() {
 
     // ********** jwt related api ***********
     app.post("/jwt", async (req, res) => {
-      const user = req.body;
-      const token = jwt.sign(user, process.env.JWT_SECRET, {
-        expiresIn: "24h",
-      });
-      res.send(token);
+      try {
+        const { email } = req.body;
+        if (!email) {
+          return res.status(400).json({ message: "Email is required" });
+        }
+        const user = await usersCollection.findOne({ email });
+        if (!user) {
+          return res.status(404).json({ message: "User not found" });
+        }
+        const token = jwt.sign(
+          { email: user.email, role: user.role },
+          process.env.JWT_SECRET,
+          {
+            expiresIn: "24d",
+          },
+        );
+        res.status(200).json({ token });
+      } catch (error) {
+        console.error("Error generating JWT:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
     });
 
-    const verifyToken = (req, res, next) => {
-      const authHeader = req.headers.authorization;
-
-      if (!authHeader?.startsWith("Bearer ")) {
-        return res.status(401).send({ message: "Unauthorized" });
-      }
-
-      const token = authHeader.split(" ")[1];
-
-      jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-        if (err) {
-          return res.status(401).send({ message: "Unauthorized" });
+    // admin verify middleware
+    const verifyAdmin = async (req, res, next) => {
+      try {
+        const email = req.user.email;
+        const user = await usersCollection.findOne({ email });
+        if (!user || user.role !== "admin") {
+          return res.status(403).json({ message: "Admin access required" });
         }
-
-        req.user = decoded;
         next();
-      });
+      } catch (error) {
+        console.error("Admin verification error:", error);
+        return res.status(500).json({ message: "Internal server error" });
+      }
     };
 
     // ************ user related api *************
@@ -73,7 +101,6 @@ async function run() {
     app.post("/users", async (req, res) => {
       try {
         const user = req.body;
-
         if (!user.email || !user.name) {
           return res
             .status(400)
@@ -103,7 +130,7 @@ async function run() {
     });
 
     // 2. get all user from db
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const users = await usersCollection.find({}).toArray();
         res.status(200).json({ success: true, data: users });
@@ -114,45 +141,37 @@ async function run() {
     });
 
     // 3. get a single user from db
-    app.get("/users/:email", verifyToken, async (req, res) => {
+    app.get("/usersRole/:email", verifyToken, async (req, res) => {
       try {
         const email = req.params.email;
-        const user = await usersCollection.findOne({ email: email });
+        const query = { email: email };
+        const user = await usersCollection.findOne(query);
 
         if (!user) {
           return res
             .status(404)
             .json({ success: false, message: "User not found" });
         }
-
-        res.status(200).json({ success: true, data: user });
+        res.send({ role: user?.role || "user" });
       } catch (error) {
-        console.error("Error getting user:", error);
-        res.status(500).json({ success: false, error: error.message });
+        console.error("Error fetching user:", error);
+        res.send({ error: "An error occurred while fetching the user" });
       }
     });
 
-    // 4. to get user which is created by firebase
-    app.get("/users/uid/:uid", async (req, res) => {
+    // 4. get a single user by email
+    app.get("/users/email/:email", verifyToken, async (req, res) => {
       try {
-        const uid = req.params.uid;
-        const user = await usersCollection.findOne({ uid: uid });
-
-        if (!user) {
-          return res
-            .status(404)
-            .json({ success: false, message: "User not found" });
-        }
-
-        res.status(200).json({ success: true, data: user });
+        const email = req.params.email;
+        const user = await usersCollection.findOne({ email });
+        res.send(user);
       } catch (error) {
-        console.error("Error getting user:", error);
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).send({ message: "Error fetching user" });
       }
     });
 
     // 5. delete user
-    app.delete("/users/:id", verifyToken, async (req, res) => {
+    app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const id = req.params.id;
         const result = await usersCollection.deleteOne({
@@ -171,248 +190,11 @@ async function run() {
         const updatedData = req.body;
         const result = await usersCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: updatedData }
+          { $set: updatedData },
         );
         res.status(200).json({ success: true, result });
       } catch (error) {
         res.status(500).json({ success: false, error: error.message });
-      }
-    });
-
-    // ************* course related apis **************
-    // 1. post api
-    app.post("/courses", async (req, res) => {
-      try {
-        const course = req.body;
-        if (!course.course_id || !course.course_name || !course.course_price) {
-          return res
-            .status(400)
-            .send({ message: "Required fields are missing" });
-        }
-
-        const existingCourse = await courseCollection.findOne({
-          course_id: course.course_id,
-        });
-
-        if (existingCourse) {
-          return res.status(409).send({
-            success: false,
-            message: "Course already exists",
-          });
-        }
-
-        const result = await courseCollection.insertOne(course);
-        res.status(201).send({
-          success: true,
-          message: "Course added successfully",
-          insertedId: result.insertedId,
-        });
-      } catch (error) {
-        console.error("Error adding course:", error);
-        res.status(500).send({
-          success: false,
-          message: "Internal server error",
-        });
-      }
-    });
-    // 2. get api
-    app.get("/courses", async (req, res) => {
-      const courses = await courseCollection.find().toArray();
-      res.send(courses);
-    });
-    // 3. get a single course
-    app.get("/courses/:id", async (req, res) => {
-      const id = req.params.id;
-      const course = await courseCollection.findOne({ course_id: id });
-
-      if (!course) {
-        return res.status(404).send({ message: "Course not found" });
-      }
-
-      res.send(course);
-    });
-
-    // 4. update course
-    app.put("/courses/:id", async (req, res) => {
-      const id = req.params.id;
-      const updateCourse = req.body;
-
-      const result = await courseCollection.updateOne(
-        { course_id: id },
-        { $set: updateCourse }
-      );
-
-      res.send({
-        message: "Course updated successfully",
-        modifiedCount: result.modifiedCount,
-      });
-    });
-
-    // 5. delete api
-    app.delete("/courses/:id", async (req, res) => {
-      const id = req.params.id;
-      const result = await courseCollection.deleteOne({ course_id: id });
-      res.send({
-        message: "Course deleted successfully",
-        deletedCount: result.deletedCount,
-      });
-    });
-    // 6. enrolled course by user
-    app.post("/enrollments", verifyToken, async (req, res) => {
-      try {
-        const { userEmail, courseId } = req.body;
-
-        console.log("Enrollment request:", { userEmail, courseId });
-
-        if (!userEmail || !courseId) {
-          return res.status(400).send({
-            success: false,
-            message: "userEmail and courseId required",
-          });
-        }
-
-        // Convert to string for consistency
-        const courseIdString = courseId.toString().trim();
-
-        // Check if course exists first
-        const course = await courseCollection.findOne({
-          course_id: courseIdString,
-        });
-
-        if (!course) {
-          console.log("Course not found:", courseIdString);
-          return res.status(404).send({
-            success: false,
-            message: "Course not found",
-          });
-        }
-
-        // Check if already enrolled
-        const exists = await enrollmentsCollection.findOne({
-          userEmail: userEmail.trim(),
-          courseId: courseIdString,
-        });
-
-        if (exists) {
-          console.log("Already enrolled:", {
-            userEmail,
-            courseId: courseIdString,
-          });
-          return res.status(409).send({
-            success: false,
-            message: "Already enrolled in this course",
-          });
-        }
-
-        // Create enrollment document
-        const enrollmentDoc = {
-          userEmail: userEmail.trim(),
-          courseId: courseIdString,
-          courseName: course.course_name, // Store course name for reference
-          enrolledAt: new Date(),
-          status: "active",
-          completed: false,
-        };
-
-        console.log("Creating enrollment:", enrollmentDoc);
-
-        const result = await enrollmentsCollection.insertOne(enrollmentDoc);
-
-        res.send({
-          success: true,
-          message: "Successfully enrolled",
-          insertedId: result.insertedId,
-          courseName: course.course_name,
-        });
-      } catch (error) {
-        console.error("Enrollment error:", error);
-        res.status(500).send({
-          success: false,
-          message: "Internal server error",
-        });
-      }
-    });
-
-    // 7. get enrolled courses
-    app.get("/my-courses", verifyToken, async (req, res) => {
-      try {
-        const email = req.query.email;
-        if (!email) return res.status(400).send({ message: "email required" });
-
-        // get all enrollments for this user
-        const enrollments = await enrollmentsCollection
-          .find({ userEmail: email })
-          .toArray();
-
-        if (!enrollments.length) return res.send([]);
-
-        // get all course IDs
-        const courseIds = enrollments.map((e) => e.courseId);
-
-        // fetch matching course docs
-        const courses = await courseCollection
-          .find({ course_id: { $in: courseIds } })
-          .toArray();
-
-        // combine: inject completed flag into course objects
-        const merged = courses.map((course) => {
-          const related = enrollments.find(
-            (e) => e.courseId.toString() === course.course_id.toString()
-          );
-          return {
-            ...course,
-            completed: related?.completed || false,
-          };
-        });
-
-        res.send(merged);
-      } catch (error) {
-        console.error("MY-COURSES ERROR:", error);
-        res.status(500).send({ message: "Internal server error" });
-      }
-    });
-
-    // mark enrolled course as completed
-    app.patch("/enrollments/complete", verifyToken, async (req, res) => {
-      try {
-        const { userEmail, courseId } = req.body;
-
-        if (!userEmail || !courseId) {
-          return res
-            .status(400)
-            .send({ message: "Email and courseId required" });
-        }
-
-        const result = await enrollmentsCollection.updateOne(
-          { userEmail, courseId: courseId.toString() },
-          { $set: { completed: true } }
-        );
-
-        if (result.modifiedCount === 0) {
-          return res.status(404).send({ message: "Enrollment not found" });
-        }
-
-        res.send({ success: true, message: "Marked as completed" });
-      } catch (error) {
-        console.error("Complete update error:", error);
-        res.status(500).send({ message: "Internal server error" });
-      }
-    });
-
-    app.get("/completed-courses", async (req, res) => {
-      try {
-        const email = req.query.email;
-        if (!email) return res.status(400).send({ message: "email required" });
-
-        const count = await enrollmentsCollection.countDocuments({
-          userEmail: email,
-          completed: true,
-        });
-
-        res.send({ completedCount: count });
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: "Internal server error" });
       }
     });
 
@@ -486,7 +268,7 @@ async function run() {
             message: "Internal server error",
           });
         }
-      }
+      },
     );
 
     // count submissions by student
@@ -516,10 +298,47 @@ async function run() {
     });
 
     // ******** blog related api *********
+    app.post("/blogs", async (req, res) => {
+      try {
+        const blog = req.body;
+        const requiredFields = ["title", "content", "author", "date"];
+        const missingFields = requiredFields.filter((field) => !blog[field]);
+        if (missingFields.length > 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Missing required fields: ${missingFields.join(", ")}`,
+          });
+        }
+        const existingBlog = await blogsCollection.findOne({ id: blog.id });
+        if (existingBlog) {
+          return res.status(409).json({
+            success: false,
+            message: "Blog with this ID already exists",
+          });
+        }
+        const result = await blogsCollection.insertOne(blog);
+        res.status(201).json({
+          success: true,
+          message: "Blog added successfully",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Error adding blog:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
+      }
+    });
+
     // 1. get api
     app.get("/blogs", async (req, res) => {
-      const blogs = await blogsCollection.find().toArray();
-      res.send(blogs);
+      try {
+        const blogs = await blogsCollection.find().toArray();
+        res.send(blogs);
+      } catch (error) {
+        console.error("Error fetching blogs:", error);
+        res.status(500).send({ message: "Error fetching blogs" });
+      }
     });
 
     // 2. get single blog
@@ -574,13 +393,25 @@ async function run() {
       }
     });
 
+    app.get("/assignments/byEmail/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      try {
+        const result = await assignmentCollection.find({ email }).toArray();
+        if (!result) {
+          return res.status(404).json({ message: "Assignment not found" });
+        }
+        res.status(200).json(result);
+      } catch (error) {
+        console.error("Error fetching assignment:", error);
+        res.status(500).json({ message: error.message });
+      }
+    });
+
     // 3. post from client
-    app.post("/assignments", async (req, res) => {
+    app.post("/assignments", verifyToken, async (req, res) => {
       try {
         const assignment = req.body;
-
         const requiredField = [
-          "assignment_id",
           "assignment_title",
           "description",
           "marks",
@@ -588,25 +419,14 @@ async function run() {
           "image",
         ];
         const missingField = requiredField.filter(
-          (field) => !assignment[field]
+          (field) => !assignment[field],
         );
         if (missingField.length > 0) {
           return res.status(400).json({
             success: false,
-            message: `Missing required fields: ${missingFields.join(", ")}`,
+            message: `Missing required fields: ${missingField.join(", ")}`,
           });
         }
-
-        const existing = await assignmentCollection.findOne({
-          assignment_id: assignment.assignment_id,
-        });
-        if (existing) {
-          return res.status(409).json({
-            success: false,
-            message: "Assignment with this ID already exists",
-          });
-        }
-
         const result = await assignmentCollection.insertOne(assignment);
         res.status(201).json({
           success: true,
@@ -615,18 +435,18 @@ async function run() {
         });
       } catch (error) {
         console.error("Error adding assignment:", error);
-        res
-          .status(500)
-          .json({ success: false, message: "Internal server error" });
+        res.status(500).json({
+          success: false,
+          message: "Internal server error",
+        });
       }
     });
     // 4. delete an assignment
     app.delete("/assignments/:id", async (req, res) => {
       try {
         const id = req.params.id;
-
         const result = await assignmentCollection.deleteOne({
-          assignment_id: id,
+          _id: new ObjectId(id),
         });
 
         if (result.deletedCount === 0) {
@@ -652,7 +472,7 @@ async function run() {
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
+      "Pinged your deployment. You successfully connected to MongoDB!",
     );
   } finally {
     // Ensures that the client will close when you finish/error
