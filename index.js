@@ -298,24 +298,10 @@ async function run() {
     });
 
     // ******** blog related api *********
+    // 1 . post api
     app.post("/blogs", async (req, res) => {
       try {
         const blog = req.body;
-        const requiredFields = ["title", "content", "author", "date"];
-        const missingFields = requiredFields.filter((field) => !blog[field]);
-        if (missingFields.length > 0) {
-          return res.status(400).json({
-            success: false,
-            message: `Missing required fields: ${missingFields.join(", ")}`,
-          });
-        }
-        const existingBlog = await blogsCollection.findOne({ id: blog.id });
-        if (existingBlog) {
-          return res.status(409).json({
-            success: false,
-            message: "Blog with this ID already exists",
-          });
-        }
         const result = await blogsCollection.insertOne(blog);
         res.status(201).json({
           success: true,
@@ -330,7 +316,7 @@ async function run() {
       }
     });
 
-    // 1. get api
+    // 2. get api
     app.get("/blogs", async (req, res) => {
       try {
         const blogs = await blogsCollection.find().toArray();
@@ -341,10 +327,20 @@ async function run() {
       }
     });
 
-    // 2. get single blog
+    // 3. get blogs by email
+    app.get("/blogs/email/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const query = email ? { email } : {};
+      const blogs = await blogsCollection.find(query).toArray();
+      res.send(blogs);
+    });
+
+    // 4. get single blog by id
     app.get("/blogs/:id", async (req, res) => {
       const id = req.params.id;
-      const blog = await blogsCollection.findOne({ id: id });
+      const blog = await blogsCollection.findOne({
+        _id: new ObjectId(id),
+      });
 
       if (!blog) {
         return res
@@ -355,11 +351,32 @@ async function run() {
       res.send(blog);
     });
 
-    // 3. delete blog
-    app.delete("/blogs/:id", async (req, res) => {
-      const id = req.params.id;
-      const result = await blogsCollection.deleteOne(id);
-      res.send(result);
+    // 5. delete blog
+    app.delete("/blogs/:id", verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const blog = await blogsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!blog) {
+          return res.status(404).send({ message: "Blog not found" });
+        }
+
+        if (blog.email !== req.user.email) {
+          return res
+            .status(403)
+            .send({ message: "Forbidden: You can't delete this blog" });
+        }
+        const result = await blogsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Server error" });
+      }
     });
 
     // *********** assignment related api ************
