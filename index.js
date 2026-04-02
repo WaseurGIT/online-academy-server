@@ -433,7 +433,6 @@ async function run() {
           "description",
           "marks",
           "deadline",
-          "image",
         ];
         const missingField = requiredField.filter(
           (field) => !assignment[field],
